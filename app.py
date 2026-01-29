@@ -145,12 +145,13 @@ if seleccion != "-- Selecciona --":
                     }).execute()
                     st.success("¡Publicado! Se verá por 24 horas.")
 
-# --- AVISOS RECIENTES (LIMPIEZA AUTOMÁTICA) ---
+# --- AVISOS RECIENTES (INTERACTIVOS) ---
 st.divider()
 st.subheader("🔔 Avisos Recientes (Últimas 24 hrs)")
 
 ayer = datetime.now() - timedelta(hours=24)
 
+# Traemos los avisos ordenados
 avisos = supabase.table('partidos').select("*")\
     .gt("creado_en", ayer.isoformat())\
     .order("creado_en", desc=True)\
@@ -158,6 +159,31 @@ avisos = supabase.table('partidos').select("*")\
 
 if avisos:
     for a in avisos:
-        st.warning(f"🏃 {a['cancha_nombre']}: Faltan {a['faltan_jugadores']} (Contacto: {a['contacto']})")
+        # Creamos un contenedor (cajita) para cada aviso
+        with st.container(border=True):
+            col_texto, col_boton = st.columns([3, 1])
+            
+            with col_texto:
+                st.markdown(f"### ⚽ {a['cancha_nombre']}")
+                st.caption(f"Contacto: {a['contacto']}")
+                
+                # Lógica visual: Si faltan 0, mostramos fiesta
+                if a['faltan_jugadores'] > 0:
+                    st.warning(f"🔴 Faltan **{a['faltan_jugadores']}** jugadores")
+                else:
+                    st.success("✅ ¡Equipo Completo! A jugar.")
+
+            with col_boton:
+                # El botón solo aparece si faltan jugadores
+                if a['faltan_jugadores'] > 0:
+                    # Usamos una clave única (key) con el ID del partido para no confundir botones
+                    if st.button("¡Yo voy! 🙋‍♂️", key=f"btn_{a['id']}"):
+                        # 1. Restamos 1 al contador en la Base de Datos
+                        nuevo_valor = a['faltan_jugadores'] - 1
+                        supabase.table('partidos').update({"faltan_jugadores": nuevo_valor}).eq("id", a['id']).execute()
+                        
+                        # 2. Mensaje de éxito y recargar página
+                        st.toast("¡Te has sumado al partido! 🏃‍♂️")
+                        st.rerun()
 else:
     st.text("No hay partidos buscando gente en las últimas 24 horas.")
