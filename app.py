@@ -5,6 +5,7 @@ from streamlit_folium import st_folium
 from supabase import create_client
 from geopy.geocoders import Nominatim
 from datetime import datetime, timedelta
+import time
 
 # --- CONFIGURACIÓN ---
 st.set_page_config(page_title="Donde Jugar", page_icon="⚽", layout="wide")
@@ -24,7 +25,8 @@ supabase = init_connection()
 # --- FUNCIONES ---
 def obtener_coordenadas(direccion):
     try:
-        geolocator = Nominatim(user_agent="app_donde_jugar_final")
+        geolocator = Nominatim(user_agent="app_donde_jugar_admin_v1")
+        # Forzamos la búsqueda en Chile para mayor precisión
         location = geolocator.geocode(f"{direccion}, Chile")
         if location:
             return location.latitude, location.longitude
@@ -45,28 +47,24 @@ def obtener_emoji(deporte_texto):
     else:
         return "📍"
 
-# ✨ NUEVA FUNCIÓN: VENTANA EMERGENTE PARA INSCRIBIRSE ✨
+# ✨ FUNCIÓN: VENTANA EMERGENTE PARA INSCRIBIRSE
 @st.dialog("¡Me sumo al partido!")
 def confirmar_asistencia(partido_id, cupos_actuales, lista_actual, nombre_cancha):
     st.write(f"Vas a jugar en: **{nombre_cancha}**")
     
-    # Pedimos los datos
     nombre = st.text_input("Tu Nombre:")
-    contacto = st.text_input("Tu WhatsApp (para que te contacten):")
+    contacto = st.text_input("Tu WhatsApp:")
     
     if st.button("Confirmar Asistencia"):
         if nombre and contacto:
-            # 1. Calculamos los nuevos valores
             nuevo_cupo = cupos_actuales - 1
-            
-            # Si la lista está vacía, ponemos el nombre. Si ya tiene gente, agregamos coma.
             nuevo_jugador = f"{nombre} ({contacto})"
+            
             if lista_actual:
                 nueva_lista = f"{lista_actual}, {nuevo_jugador}"
             else:
                 nueva_lista = nuevo_jugador
             
-            # 2. Guardamos en Base de Datos
             supabase.table('partidos').update({
                 "faltan_jugadores": nuevo_cupo,
                 "lista_jugadores": nueva_lista
@@ -76,6 +74,53 @@ def confirmar_asistencia(partido_id, cupos_actuales, lista_actual, nombre_cancha
             st.rerun()
         else:
             st.error("Por favor llena nombre y contacto.")
+
+# --- BARRA LATERAL (ADMINISTRADOR) ---
+with st.sidebar:
+    st.header("🕵️ Zona Admin")
+    # Checkbox para desplegar el login
+    mostrar_login = st.checkbox("Soy Administrador")
+    
+    if mostrar_login:
+        password = st.text_input("Contraseña", type="password")
+        
+        # 🔒 CONTRASEÑA DE ACCESO (Cámbiala aquí si quieres)
+        if password == "admin123":
+            st.success("🔓 Acceso Concedido")
+            st.divider()
+            st.subheader("Agregar Nueva Cancha")
+            
+            with st.form("form_nueva_cancha"):
+                new_nombre = st.text_input("Nombre del lugar")
+                new_direccion = st.text_input("Dirección (Calle y Comuna)")
+                new_deporte = st.selectbox("Deporte", ["Fútbol", "Básquetbol", "Tenis", "Voleibol", "Multicancha"])
+                
+                submitted = st.form_submit_button("Guardar Cancha")
+                
+                if submitted:
+                    if new_nombre and new_direccion:
+                        with st.spinner("Buscando coordenadas GPS..."):
+                            coords = obtener_coordenadas(new_direccion)
+                            
+                            if coords:
+                                lat_new, lon_new = coords
+                                # Insertar en Supabase
+                                supabase.table('canchas').insert({
+                                    "nombre": new_nombre,
+                                    "direccion": new_direccion,
+                                    "latitud": lat_new,
+                                    "longitud": lon_new,
+                                    "deporte": new_deporte
+                                }).execute()
+                                st.success(f"✅ ¡{new_nombre} agregada con éxito!")
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error("❌ No encontramos esa dirección. Intenta ser más específico (Ej: Av. Providencia 123, Providencia)")
+                    else:
+                        st.warning("Falta el nombre o la dirección.")
+        elif password:
+            st.error("Contraseña incorrecta")
 
 # --- APP PRINCIPAL ---
 st.title("📍 ¿Dónde jugamos hoy?")
@@ -144,31 +189,33 @@ opciones = [c['nombre'] for c in data_filtrada]
 seleccion = st.selectbox("Elige una cancha:", ["-- Selecciona --"] + opciones)
 
 if seleccion != "-- Selecciona --":
-    info = next(c for c in data_todas if c['nombre'] == seleccion)
-    emoji_titulo = obtener_emoji(info['deporte'])
-    st.info(f"🏟️ **{info['nombre']}** ({emoji_titulo} {info['deporte']})")
+    # Usamos next con un valor por defecto para evitar errores si la lista está vacía
+    info = next((c for c in data_todas if c['nombre'] == seleccion), None)
     
-    with st.expander("📢 Publicar 'Falta Uno'"):
-        with st.form("alerta"):
-            faltan = st.number_input("Jugadores faltantes", 1, 10)
-            contacto = st.text_input("Contacto")
-            if st.form_submit_button("Publicar"):
-                if contacto:
-                    supabase.table('partidos').insert({
-                        "cancha_nombre": info['nombre'],
-                        "faltan_jugadores": faltan,
-                        "contacto": contacto,
-                        "lista_jugadores": "" # Inicializamos vacío
-                    }).execute()
-                    st.success("¡Publicado! Se verá por 24 horas.")
+    if info:
+        emoji_titulo = obtener_emoji(info['deporte'])
+        st.info(f"🏟️ **{info['nombre']}** ({emoji_titulo} {info['deporte']})")
+        
+        with st.expander("📢 Publicar 'Falta Uno'"):
+            with st.form("alerta"):
+                faltan = st.number_input("Jugadores faltantes", 1, 10)
+                contacto = st.text_input("Contacto")
+                if st.form_submit_button("Publicar"):
+                    if contacto:
+                        supabase.table('partidos').insert({
+                            "cancha_nombre": info['nombre'],
+                            "faltan_jugadores": faltan,
+                            "contacto": contacto,
+                            "lista_jugadores": "" 
+                        }).execute()
+                        st.success("¡Publicado! Se verá por 24 horas.")
 
-# --- AVISOS RECIENTES MEJORADOS ---
+# --- AVISOS RECIENTES ---
 st.divider()
 st.subheader("🔔 Avisos Recientes (Últimas 24 hrs)")
 
 ayer = datetime.now() - timedelta(hours=24)
 
-# Traemos los avisos
 avisos = supabase.table('partidos').select("*")\
     .gt("creado_en", ayer.isoformat())\
     .order("creado_en", desc=True)\
@@ -188,13 +235,11 @@ if avisos:
                 else:
                     st.success("✅ ¡Equipo Completo!")
 
-                # MOSTRAR QUIÉNES SE HAN INSCRITO
                 if a['lista_jugadores']:
                     st.info(f"📝 **Ya se anotaron:** {a['lista_jugadores']}")
 
             with col_boton:
                 if a['faltan_jugadores'] > 0:
-                    # Al hacer click, llamamos a la función dialog
                     if st.button("¡Yo voy!", key=f"btn_{a['id']}"):
                         confirmar_asistencia(
                             a['id'], 
