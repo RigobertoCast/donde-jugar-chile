@@ -25,8 +25,7 @@ supabase = init_connection()
 # --- FUNCIONES ---
 def obtener_coordenadas(direccion):
     try:
-        geolocator = Nominatim(user_agent="app_donde_jugar_admin_v1")
-        # Forzamos la búsqueda en Chile para mayor precisión
+        geolocator = Nominatim(user_agent="app_donde_jugar_admin_final")
         location = geolocator.geocode(f"{direccion}, Chile")
         if location:
             return location.latitude, location.longitude
@@ -78,47 +77,66 @@ def confirmar_asistencia(partido_id, cupos_actuales, lista_actual, nombre_cancha
 # --- BARRA LATERAL (ADMINISTRADOR) ---
 with st.sidebar:
     st.header("🕵️ Zona Admin")
-    # Checkbox para desplegar el login
     mostrar_login = st.checkbox("Soy Administrador")
     
     if mostrar_login:
         password = st.text_input("Contraseña", type="password")
         
-        # 🔒 CONTRASEÑA DE ACCESO (Cámbiala aquí si quieres)
         if password == "admin123":
             st.success("🔓 Acceso Concedido")
-            st.divider()
-            st.subheader("Agregar Nueva Cancha")
             
-            with st.form("form_nueva_cancha"):
-                new_nombre = st.text_input("Nombre del lugar")
-                new_direccion = st.text_input("Dirección (Calle y Comuna)")
-                new_deporte = st.selectbox("Deporte", ["Fútbol", "Básquetbol", "Tenis", "Voleibol", "Multicancha"])
+            # --- PESTAÑAS PARA ORGANIZAR EL ADMIN ---
+            tab1, tab2 = st.tabs(["Agregar", "Borrar"])
+            
+            # PESTAÑA 1: AGREGAR (Lo que ya tenías)
+            with tab1:
+                st.subheader("Nueva Cancha")
+                with st.form("form_nueva_cancha"):
+                    new_nombre = st.text_input("Nombre")
+                    new_direccion = st.text_input("Dirección")
+                    new_deporte = st.selectbox("Deporte", ["Fútbol", "Básquetbol", "Tenis", "Voleibol", "Multicancha"])
+                    
+                    if st.form_submit_button("Guardar"):
+                        if new_nombre and new_direccion:
+                            with st.spinner("Ubicando..."):
+                                coords = obtener_coordenadas(new_direccion)
+                                if coords:
+                                    supabase.table('canchas').insert({
+                                        "nombre": new_nombre,
+                                        "direccion": new_direccion,
+                                        "latitud": coords[0],
+                                        "longitud": coords[1],
+                                        "deporte": new_deporte
+                                    }).execute()
+                                    st.success("✅ Guardada")
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error("❌ Dirección no encontrada")
+            
+            # PESTAÑA 2: BORRAR (Nueva funcionalidad)
+            with tab2:
+                st.subheader("🗑️ Eliminar Cancha")
+                st.warning("Cuidado: Esto no se puede deshacer.")
                 
-                submitted = st.form_submit_button("Guardar Cancha")
-                
-                if submitted:
-                    if new_nombre and new_direccion:
-                        with st.spinner("Buscando coordenadas GPS..."):
-                            coords = obtener_coordenadas(new_direccion)
-                            
-                            if coords:
-                                lat_new, lon_new = coords
-                                # Insertar en Supabase
-                                supabase.table('canchas').insert({
-                                    "nombre": new_nombre,
-                                    "direccion": new_direccion,
-                                    "latitud": lat_new,
-                                    "longitud": lon_new,
-                                    "deporte": new_deporte
-                                }).execute()
-                                st.success(f"✅ ¡{new_nombre} agregada con éxito!")
-                                time.sleep(2)
-                                st.rerun()
-                            else:
-                                st.error("❌ No encontramos esa dirección. Intenta ser más específico (Ej: Av. Providencia 123, Providencia)")
-                    else:
-                        st.warning("Falta el nombre o la dirección.")
+                # Traemos las canchas para ponerlas en la lista
+                lista_canchas = supabase.table('canchas').select("id, nombre").execute().data
+                if lista_canchas:
+                    # Creamos un diccionario {Nombre: ID} para saber cuál borrar
+                    opciones_dict = {c['nombre']: c['id'] for c in lista_canchas}
+                    seleccion_borrar = st.selectbox("Selecciona cancha:", ["-- Selecciona --"] + list(opciones_dict.keys()))
+                    
+                    if seleccion_borrar != "-- Selecciona --":
+                        if st.button("❌ Eliminar Definitivamente", type="primary"):
+                            id_a_borrar = opciones_dict[seleccion_borrar]
+                            # Borramos en Supabase
+                            supabase.table('canchas').delete().eq('id', id_a_borrar).execute()
+                            st.success(f"Chao, {seleccion_borrar} 👋")
+                            time.sleep(1)
+                            st.rerun()
+                else:
+                    st.info("No hay canchas para borrar.")
+
         elif password:
             st.error("Contraseña incorrecta")
 
@@ -189,7 +207,6 @@ opciones = [c['nombre'] for c in data_filtrada]
 seleccion = st.selectbox("Elige una cancha:", ["-- Selecciona --"] + opciones)
 
 if seleccion != "-- Selecciona --":
-    # Usamos next con un valor por defecto para evitar errores si la lista está vacía
     info = next((c for c in data_todas if c['nombre'] == seleccion), None)
     
     if info:
